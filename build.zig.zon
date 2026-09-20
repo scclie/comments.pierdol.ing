@@ -1,0 +1,16 @@
+.{
+    .name = .comments_api,
+    .version = "0.1.0",
+    .fingerprint = 0xc269a11c8931701a,
+    .paths = .{""},
+    .dependencies = .{
+        .httpz = .{
+            .url = "https://github.com/karlseguin/http.zig/archive/refs/heads/master.tar.gz",
+            .hash = "httpz-0.0.0-PNVzrMgTCQDhzfBLRRebTx9LU056Ph2erdN9-42rFbhj",
+        },
+        .pg = .{
+            .url = "git+https://github.com/karlseguin/pg.zig?ref=master#540b8c324e641c0062a94c3fa36a504770632611",
+            .hash = "pg-0.0.0-Wp_7gUTVBgC6Korj2nfi7JXrGEo3tJ2faAT_zOo93Dbf",
+        },
+    },
+}

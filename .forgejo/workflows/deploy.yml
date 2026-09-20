@@ -1,0 +1,34 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: comments-deploy
+
+jobs:
+  deploy:
+    if: startsWith(github.server_url, 'http://10.69.0.10') || startsWith(github.server_url, 'https://git.sccl.cc')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseSmall
+
+      - name: Install docker CLI
+        run: apt-get update && apt-get install -y docker.io
+
+      - name: Build and push image
+        run: |
+          docker build -t 10.69.0.17:5000/scclie/comments:main .
+          docker push 10.69.0.17:5000/scclie/comments:main
+
+      - name: Restart container
+        run: docker rm -f comments || true
