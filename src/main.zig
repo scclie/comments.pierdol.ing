@@ -41,6 +41,7 @@ pub fn main(init: std.process.Init) !void {
     defer server.stop();
 
     var router = try server.router(.{});
+    router.options("*", corsPreflight, .{});
     router.get("/health", health, .{});
     router.get("/api/threads/:id/comments", getComments, .{});
     router.post("/api/threads/:id/comments", createComment, .{});
@@ -52,11 +53,27 @@ pub fn main(init: std.process.Init) !void {
     try server.listen();
 }
 
-fn health(_: *App, _: *httpz.Request, res: *httpz.Response) !void {
+fn corsPreflight(_: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    addCorsHeaders(res, req);
+    res.status = 204;
+}
+
+fn addCorsHeaders(res: *httpz.Response, req: *httpz.Request) void {
+    const origin = req.header("origin") orelse return;
+    _ = origin;
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type, X-Bot-Token");
+    res.header("Access-Control-Max-Age", "86400");
+}
+
+fn health(_: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    addCorsHeaders(res, req);
     try res.json(.{ .status = "ok" }, .{});
 }
 
 fn getComments(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    addCorsHeaders(res, req);
     const ip = getClientIp(req);
     if (!app.read_limiter.check(ip)) {
         res.status = 429;
@@ -117,6 +134,7 @@ const CreateCommentBody = struct {
 };
 
 fn createComment(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    addCorsHeaders(res, req);
     const ip = getClientIp(req);
     if (!app.write_limiter.check(ip)) {
         res.status = 429;
@@ -186,6 +204,7 @@ fn createComment(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 }
 
 fn approveComment(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    addCorsHeaders(res, req);
     const token = req.header("x-bot-token") orelse {
         res.status = 401;
         try res.json(.{ .@"error" = "unauthorized" }, .{});
@@ -214,6 +233,7 @@ fn approveComment(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 }
 
 fn deleteComment(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    addCorsHeaders(res, req);
     const token = req.header("x-bot-token") orelse {
         res.status = 401;
         try res.json(.{ .@"error" = "unauthorized" }, .{});
