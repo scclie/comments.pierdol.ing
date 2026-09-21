@@ -4,13 +4,13 @@ const config = @import("config.zig");
 const db = @import("db.zig");
 const markdown = @import("markdown.zig");
 const ratelimit = @import("ratelimit.zig");
-const telegram = @import("telegram.zig");
+const matrix = @import("matrix.zig");
 
 const App = struct {
     db: db.Db,
     read_limiter: ratelimit.RateLimiter,
     write_limiter: ratelimit.RateLimiter,
-    tg: telegram.Telegram,
+    matrix: matrix.Matrix,
     bot_secret: []const u8,
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -28,7 +28,7 @@ pub fn main(init: std.process.Init) !void {
         .db = database,
         .read_limiter = ratelimit.RateLimiter.init(allocator, 60_000, 60),
         .write_limiter = ratelimit.RateLimiter.init(allocator, 60_000, 5),
-        .tg = telegram.Telegram.init(cfg.telegram_bot_token, cfg.telegram_user_id, allocator, init.io),
+        .matrix = matrix.Matrix.init(cfg.matrix_homeserver, cfg.matrix_bot_token, cfg.matrix_room_id, allocator, init.io),
         .bot_secret = cfg.bot_secret,
         .io = init.io,
         .allocator = allocator,
@@ -196,8 +196,8 @@ fn createComment(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         .honeypot = body.honeypot,
     });
 
-    app.tg.sendNotification(thread_id, nickname, content, comment.id) catch |err| {
-        std.log.warn("failed to send telegram notification: {}", .{err});
+    app.matrix.sendNotification(thread_id, nickname, content, comment.id) catch |err| {
+        std.log.warn("failed to send matrix notification: {}", .{err});
     };
 
     try res.json(.{ .id = comment.id, .status = comment.status }, .{});

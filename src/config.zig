@@ -3,8 +3,9 @@ const std = @import("std");
 pub const Config = struct {
     port: u16,
     database_url: []const u8,
-    telegram_bot_token: []const u8,
-    telegram_user_id: []const u8,
+    matrix_homeserver: []const u8,
+    matrix_bot_token: []const u8,
+    matrix_room_id: []const u8,
     bot_secret: []const u8,
 
     pub fn load(environ_map: *std.process.Environ.Map, allocator: std.mem.Allocator) !Config {
@@ -15,12 +16,16 @@ pub const Config = struct {
             return error.MissingDatabaseUrl;
         };
 
-        const telegram_bot_token = environ_map.get("TELEGRAM_BOT_TOKEN") orelse {
-            return error.MissingTelegramBotToken;
+        const matrix_homeserver = environ_map.get("MATRIX_HOMESERVER") orelse {
+            return error.MissingMatrixHomeserver;
         };
 
-        const telegram_user_id = environ_map.get("TELEGRAM_USER_ID") orelse {
-            return error.MissingTelegramUserId;
+        const matrix_bot_token = environ_map.get("MATRIX_BOT_TOKEN") orelse {
+            return error.MissingMatrixBotToken;
+        };
+
+        const matrix_room_id = environ_map.get("MATRIX_ROOM_ID") orelse {
+            return error.MissingMatrixRoomId;
         };
 
         const bot_secret = environ_map.get("BOT_SECRET") orelse {
@@ -32,8 +37,9 @@ pub const Config = struct {
         return Config{
             .port = port,
             .database_url = database_url,
-            .telegram_bot_token = telegram_bot_token,
-            .telegram_user_id = telegram_user_id,
+            .matrix_homeserver = matrix_homeserver,
+            .matrix_bot_token = matrix_bot_token,
+            .matrix_room_id = matrix_room_id,
             .bot_secret = bot_secret,
         };
     }

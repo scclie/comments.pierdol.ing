@@ -62,9 +62,9 @@ pub fn build(b: *std.Build) !void {
         }),
     });
 
-    const telegram_tests = b.addTest(.{
+    const matrix_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/telegram.zig"),
+            .root_source_file = b.path("src/matrix.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -73,11 +73,11 @@ pub fn build(b: *std.Build) !void {
     const run_markdown_tests = b.addRunArtifact(markdown_tests);
     const run_ratelimit_tests = b.addRunArtifact(ratelimit_tests);
     const run_nickgen_tests = b.addRunArtifact(nickgen_tests);
-    const run_telegram_tests = b.addRunArtifact(telegram_tests);
+    const run_matrix_tests = b.addRunArtifact(matrix_tests);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_markdown_tests.step);
     test_step.dependOn(&run_ratelimit_tests.step);
     test_step.dependOn(&run_nickgen_tests.step);
-    test_step.dependOn(&run_telegram_tests.step);
+    test_step.dependOn(&run_matrix_tests.step);
 }
