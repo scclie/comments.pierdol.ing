@@ -115,6 +115,39 @@ pub const Db = struct {
         );
         return (affected orelse 0) > 0;
     }
+
+    pub fn getUnnotifiedComments(self: *Db, allocator: std.mem.Allocator) ![]Comment {
+        var comments = std.ArrayList(Comment).empty;
+        errdefer {
+            for (comments.items) |c| freeComment(c, allocator);
+            comments.deinit(allocator);
+        }
+
+        var result = try self.pool.queryOpts(
+            \\SELECT id, thread_id, parent_id, nickname, site, content, html, status, created_at
+            \\FROM comments
+            \\WHERE notified = false
+            \\ORDER BY created_at ASC
+        ,
+            .{},
+            .{ .column_names = true },
+        );
+        defer result.deinit();
+
+        while (try result.next()) |row| {
+            try comments.append(allocator, try rowToComment(allocator, row));
+        }
+
+        return comments.toOwnedSlice(allocator);
+    }
+
+    pub fn markAsNotified(self: *Db, id: []const u8) !bool {
+        const affected = try self.pool.exec(
+            "UPDATE comments SET notified = true WHERE id = $1",
+            .{id},
+        );
+        return (affected orelse 0) > 0;
+    }
 };
 
 fn rowToComment(allocator: std.mem.Allocator, row: anytype) !Comment {

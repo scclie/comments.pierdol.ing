@@ -48,9 +48,44 @@ pub fn main(init: std.process.Init) !void {
     router.post("/api/comments/:id/approve", approveComment, .{});
     router.post("/api/comments/:id/delete", deleteComment, .{});
 
+    try resendUnnotified(&app);
+
     std.log.info("listening on http://localhost:{d}", .{cfg.port});
 
     try server.listen();
+}
+
+fn resendUnnotified(app: *App) !void {
+    const comments = try app.db.getUnnotifiedComments(app.allocator);
+    defer {
+        for (comments) |c| freeComment(c, app.allocator);
+        app.allocator.free(comments);
+    }
+
+    if (comments.len == 0) return;
+
+    std.log.info("resending {d} unnotified comments", .{comments.len});
+
+    for (comments) |c| {
+        app.matrix.sendNotification(c.thread_id, c.nickname, c.content, c.id) catch |err| {
+            std.log.warn("failed to resend notification for {s}: {}", .{ c.id, err });
+            continue;
+        };
+
+        _ = try app.db.markAsNotified(c.id);
+        std.log.info("resent notification for {s}", .{c.id});
+    }
+}
+
+fn freeComment(comment: db.Comment, allocator: std.mem.Allocator) void {
+    allocator.free(comment.id);
+    allocator.free(comment.thread_id);
+    if (comment.parent_id) |pid| allocator.free(pid);
+    allocator.free(comment.nickname);
+    if (comment.site) |s| allocator.free(s);
+    allocator.free(comment.content);
+    allocator.free(comment.html);
+    allocator.free(comment.status);
 }
 
 fn corsPreflight(_: *App, req: *httpz.Request, res: *httpz.Response) !void {
@@ -198,7 +233,10 @@ fn createComment(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
 
     app.matrix.sendNotification(thread_id, nickname, content, comment.id) catch |err| {
         std.log.warn("failed to send matrix notification: {}", .{err});
+        return;
     };
+
+    _ = try app.db.markAsNotified(comment.id);
 
     try res.json(.{ .id = comment.id, .status = comment.status }, .{});
 }

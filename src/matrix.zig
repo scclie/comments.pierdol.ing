@@ -21,9 +21,11 @@ pub const Matrix = struct {
         const body = try formatMessage(self.allocator, thread_id, nickname, content, comment_id);
         defer self.allocator.free(body);
 
+        var rng = std.Random.DefaultPrng.init(0);
+        const timestamp = rng.random().int(u64);
         const url = try std.fmt.allocPrint(self.allocator,
-            "{s}/_matrix/client/v3/rooms/{s}/send/m.room.message",
-            .{ self.homeserver, self.room_id });
+            "{s}/_matrix/client/v3/rooms/{s}/send/m.room.message/{d}",
+            .{ self.homeserver, self.room_id, timestamp });
         defer self.allocator.free(url);
 
         const json_body = try buildJsonBody(self.allocator, body);
@@ -37,7 +39,7 @@ pub const Matrix = struct {
 
         const result = try client.fetch(.{
             .location = .{ .url = url },
-            .method = .POST,
+            .method = .PUT,
             .payload = json_body,
             .headers = .{
                 .content_type = .{ .override = "application/json" },
@@ -53,12 +55,36 @@ pub const Matrix = struct {
 
 pub fn formatMessage(allocator: std.mem.Allocator, thread_id: []const u8, nickname: []const u8, content: []const u8, comment_id: []const u8) ![]const u8 {
     return std.fmt.allocPrint(allocator,
-        "\u{1F4AC} New comment on {s}\n\n@{s}:\n> {s}\n\nReply with /approve {s} or /delete {s}",
-        .{ thread_id, nickname, content, comment_id, comment_id });
+        "\u{1F4AC} New comment on {s}\n\n@{s}:\n> {s}\n\nReply /ok to approve or /no to delete\nComment ID: {s}",
+        .{ thread_id, nickname, content, comment_id });
 }
 
 fn buildJsonBody(allocator: std.mem.Allocator, body: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(allocator,
-        "{{\"msgtype\":\"m.text\",\"body\":\"{s}\"}}",
-        .{body});
+    var result = std.ArrayListUnmanaged(u8).empty;
+    defer result.deinit(allocator);
+
+    try result.appendSlice(allocator, "{\"msgtype\":\"m.text\",\"body\":\"");
+
+    for (body) |c| {
+        switch (c) {
+            '"' => try result.appendSlice(allocator, "\\\""),
+            '\\' => try result.appendSlice(allocator, "\\\\"),
+            '\n' => try result.appendSlice(allocator, "\\n"),
+            '\r' => try result.appendSlice(allocator, "\\r"),
+            '\t' => try result.appendSlice(allocator, "\\t"),
+            else => {
+                if (c < 0x20) {
+                    const escaped = try std.fmt.allocPrint(allocator, "\\u{:0>4}", .{c});
+                    defer allocator.free(escaped);
+                    try result.appendSlice(allocator, escaped);
+                } else {
+                    try result.append(allocator, c);
+                }
+            },
+        }
+    }
+
+    try result.appendSlice(allocator, "\"}");
+
+    return result.toOwnedSlice(allocator);
 }
