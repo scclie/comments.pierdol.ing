@@ -1,5 +1,7 @@
 const std = @import("std");
 
+var confirm_counter: u64 = 0;
+
 pub const Matrix = struct {
     homeserver: []const u8,
     access_token: []const u8,
@@ -34,10 +36,8 @@ pub const Matrix = struct {
         var client = std.http.Client{ .allocator = self.allocator, .io = self.io };
         defer client.deinit();
 
-        var response_buffer = std.ArrayList(u8).empty;
-        defer response_buffer.deinit(self.allocator);
-
-        var writer = std.Io.Writer.fromArrayList(&response_buffer);
+        var response_buffer: [1024 * 1024]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&response_buffer);
 
         const result = try client.fetch(.{
             .location = .{ .url = url },
@@ -54,8 +54,7 @@ pub const Matrix = struct {
             return error.MatrixApiError;
         }
 
-        const response = try response_buffer.toOwnedSlice(self.allocator);
-        defer self.allocator.free(response);
+        const response = writer.buffered();
 
         // JSON parsing for event_id
         if (std.mem.indexOf(u8, response, "\"event_id\":\"")) |start| {
@@ -68,6 +67,39 @@ pub const Matrix = struct {
 
         return "";
     }
+    pub fn sendMessage(self: *Matrix, text: []const u8) !void {
+        const mono = @atomicRmw(u64, &confirm_counter, .Add, 1, .monotonic);
+        const url = try std.fmt.allocPrint(self.allocator, "{s}/_matrix/client/v3/rooms/{s}/send/m.room.message/confirm-{d}", .{ self.homeserver, self.room_id, mono });
+        defer self.allocator.free(url);
+
+        const json_body = try buildJsonBody(self.allocator, text);
+        defer self.allocator.free(json_body);
+
+        const auth_header = try std.fmt.allocPrint(self.allocator, "Bearer {s}", .{self.access_token});
+        defer self.allocator.free(auth_header);
+
+        var client = std.http.Client{ .allocator = self.allocator, .io = self.io };
+        defer client.deinit();
+
+        var response_buffer: [1024 * 1024]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&response_buffer);
+
+        const result = try client.fetch(.{
+            .location = .{ .url = url },
+            .method = .PUT,
+            .payload = json_body,
+            .headers = .{
+                .content_type = .{ .override = "application/json" },
+                .authorization = .{ .override = auth_header },
+            },
+            .response_writer = &writer,
+        });
+
+        if (@intFromEnum(result.status) >= 400) {
+            return error.MatrixApiError;
+        }
+    }
+
     pub fn sync(self: *Matrix) !?[]const u8 {
         const url = if (self.since) |since|
             try std.fmt.allocPrint(self.allocator, "{s}/_matrix/client/v3/sync?since={s}&timeout=30000", .{ self.homeserver, since })
@@ -81,10 +113,8 @@ pub const Matrix = struct {
         var client = std.http.Client{ .allocator = self.allocator, .io = self.io };
         defer client.deinit();
 
-        var response_buffer = std.ArrayList(u8).empty;
-        defer response_buffer.deinit(self.allocator);
-
-        var writer = std.Io.Writer.fromArrayList(&response_buffer);
+        var response_buffer: [1024 * 1024]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&response_buffer);
 
         const result = try client.fetch(.{
             .location = .{ .url = url },
@@ -99,7 +129,7 @@ pub const Matrix = struct {
             return error.MatrixSyncError;
         }
 
-        return try response_buffer.toOwnedSlice(self.allocator);
+        return self.allocator.dupe(u8, writer.buffered()) catch return null;
     }
 };
 
@@ -114,8 +144,22 @@ pub fn formatMessage(allocator: std.mem.Allocator, thread_id: []const u8, nickna
 }
 
 fn formatDate(allocator: std.mem.Allocator, timestamp: i64) ![]const u8 {
-    // timestamp formatting
-    return std.fmt.allocPrint(allocator, "{d}", .{timestamp});
+    const secs: u64 = @intCast(@divFloor(timestamp, 1_000_000));
+    const e = std.time.epoch.EpochSeconds{ .secs = secs };
+    const epoch_day = e.getEpochDay();
+    const year_day = epoch_day.calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+    const seconds_into_day = e.getDaySeconds();
+    const hour = seconds_into_day.getHoursIntoDay();
+    const minute = seconds_into_day.getMinutesIntoHour();
+
+    return std.fmt.allocPrint(allocator, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}", .{
+        year_day.year,
+        month_day.month.numeric(),
+        month_day.day_index + 1,
+        hour,
+        minute,
+    });
 }
 
 fn buildJsonBody(allocator: std.mem.Allocator, body: []const u8) ![]const u8 {

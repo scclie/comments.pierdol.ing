@@ -23,6 +23,13 @@ pub const CreateCommentParams = struct {
     honeypot: ?[]const u8,
 };
 
+pub const OwnerReplyParams = struct {
+    thread_id: []const u8,
+    parent_id: []const u8,
+    content: []const u8,
+    html: []const u8,
+};
+
 pub const Db = struct {
     pool: *pg.Pool,
 
@@ -134,7 +141,40 @@ pub const Db = struct {
 
         const id_bytes = try row.get([]const u8, 0);
         const id_hex = try pg.uuidToHex(id_bytes);
-        return allocator.dupe(u8, &id_hex);
+        return allocator.dupe(u8, &id_hex) catch return null;
+    }
+
+    pub fn getCommentById(self: *Db, allocator: std.mem.Allocator, id: []const u8) !?Comment {
+        var row = (try self.pool.rowOpts(
+            \\SELECT id, thread_id, parent_id, nickname, site, content, html, status, created_at
+            \\FROM comments
+            \\WHERE id = $1
+        ,
+            .{id},
+            .{ .column_names = true },
+        )) orelse return null;
+        defer row.deinit() catch {};
+
+        return try rowToComment(allocator, row);
+    }
+
+    pub fn createOwnerReply(self: *Db, allocator: std.mem.Allocator, params: OwnerReplyParams) !Comment {
+        var row = (try self.pool.rowOpts(
+            \\INSERT INTO comments (thread_id, parent_id, nickname, site, content, html, status, notified)
+            \\VALUES ($1, $2, 'scclie', NULL, $3, $4, 'approved', true)
+            \\RETURNING id, thread_id, parent_id, nickname, site, content, html, status, created_at
+        ,
+            .{
+                params.thread_id,
+                params.parent_id,
+                params.content,
+                params.html,
+            },
+            .{ .column_names = true },
+        )) orelse return error.NoResult;
+        defer row.deinit() catch {};
+
+        return rowToComment(allocator, row);
     }
 
     pub fn getUnnotifiedComments(self: *Db, allocator: std.mem.Allocator) ![]Comment {

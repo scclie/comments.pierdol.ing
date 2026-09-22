@@ -74,6 +74,20 @@ fn matrixSyncLoop(app: *App) void {
             processSyncResponse(app, body) catch |err| {
                 std.log.warn("failed to process sync response: {}", .{err});
             };
+
+            const parsed = std.json.parseFromSlice(std.json.Value, app.allocator, body, .{}) catch continue;
+            defer parsed.deinit();
+
+            if (parsed.value == .object) {
+                if (parsed.value.object.get("next_batch")) |next_batch| {
+                    if (next_batch == .string) {
+                        if (app.matrix.since) |old| {
+                            app.allocator.free(old);
+                        }
+                        app.matrix.since = app.allocator.dupe(u8, next_batch.string) catch null;
+                    }
+                }
+            }
         }
 
         std.Thread.yield() catch {};
@@ -152,7 +166,78 @@ fn processEvent(app: *App, event: std.json.Value) !void {
         else => return,
     };
 
-    // parse command
+    const reply_event_id: ?[]const u8 = blk: {
+        const relates_to = switch (content.get("m.relates_to") orelse break :blk null) {
+            .object => |o| o,
+            else => break :blk null,
+        };
+        const in_reply_to = switch (relates_to.get("m.in_reply_to") orelse break :blk null) {
+            .object => |o| o,
+            else => break :blk null,
+        };
+        break :blk switch (in_reply_to.get("event_id") orelse break :blk null) {
+            .string => |s| s,
+            else => null,
+        };
+    };
+
+    if (reply_event_id) |event_id| {
+        // Strip the quoted "> " block that Element prepends to replies
+        const reply_text = try stripReplyQuote(app.allocator, body);
+        defer app.allocator.free(reply_text);
+        const text = std.mem.trim(u8, reply_text, " \t");
+
+        if (std.mem.eql(u8, text, "ok") or std.mem.eql(u8, text, "/ok") or std.mem.startsWith(u8, text, "ok ")) {
+            const comment_id = try app.db.getCommentIdByEventId(app.allocator, event_id) orelse {
+                std.log.warn("no comment found for event_id {s}", .{event_id});
+                return;
+            };
+            defer app.allocator.free(comment_id);
+
+            std.log.info("approving comment {s} via reply", .{comment_id});
+            const approved = try app.db.approveComment(comment_id);
+            if (!approved) {
+                app.matrix.sendMessage("hmm, comment not found") catch {};
+                return;
+            }
+
+            if (text.len > 2) {
+                const answer = std.mem.trim(u8, text[3..], " \t");
+                if (answer.len > 0) {
+                    const comment = try app.db.getCommentById(app.allocator, comment_id);
+                    if (comment) |c| {
+                        defer freeComment(c, app.allocator);
+                        const html = try markdown.render(app.allocator, answer);
+                        defer app.allocator.free(html);
+                        _ = try app.db.createOwnerReply(app.allocator, .{
+                            .thread_id = c.thread_id,
+                            .parent_id = c.id,
+                            .content = answer,
+                            .html = html,
+                        });
+                        std.log.info("posted owner reply to comment {s}", .{comment_id});
+                    }
+                    app.matrix.sendMessage("ok, comment approved + your reply posted") catch {};
+                    return;
+                }
+            }
+            app.matrix.sendMessage("ok, comment approved") catch {};
+        } else if (std.mem.eql(u8, text, "no") or std.mem.eql(u8, text, "/no") or std.mem.eql(u8, text, "no ")) {
+            const comment_id = try app.db.getCommentIdByEventId(app.allocator, event_id) orelse {
+                std.log.warn("no comment found for event_id {s}", .{event_id});
+                return;
+            };
+            defer app.allocator.free(comment_id);
+
+            std.log.info("deleting comment {s} via reply", .{comment_id});
+            const deleted = try app.db.deleteComment(comment_id);
+            app.matrix.sendMessage(if (deleted) "ok, comment deleted" else "hmm, comment not found") catch {};
+        } else {
+            app.matrix.sendMessage("i heard u, but only \"ok [your answer]\" or \"no\" work as replies") catch {};
+        }
+        return;
+    }
+
     if (std.mem.startsWith(u8, body, "ok ") or std.mem.eql(u8, body, "ok")) {
         const comment_id = if (body.len > 3) body[3..] else return;
         std.log.info("approving comment {s}", .{comment_id});
@@ -162,6 +247,29 @@ fn processEvent(app: *App, event: std.json.Value) !void {
         std.log.info("deleting comment {s}", .{comment_id});
         _ = try app.db.deleteComment(comment_id);
     }
+}
+
+fn stripReplyQuote(allocator: std.mem.Allocator, body: []const u8) ![]const u8 {
+    var result = std.ArrayList(u8).empty;
+    errdefer result.deinit(allocator);
+
+    var it = std.mem.splitScalar(u8, body, '\n');
+    var in_reply = false;
+    while (it.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t");
+        if (std.mem.startsWith(u8, trimmed, ">")) continue;
+        if (!in_reply) {
+            if (trimmed.len == 0) continue;
+            in_reply = true;
+        }
+        try result.appendSlice(allocator, line);
+        try result.append(allocator, '\n');
+    }
+
+    if (result.items.len > 0 and result.items[result.items.len - 1] == '\n') {
+        result.items.len -= 1;
+    }
+    return result.toOwnedSlice(allocator);
 }
 
 fn resendUnnotified(app: *App) !void {

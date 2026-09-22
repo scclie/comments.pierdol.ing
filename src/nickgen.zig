@@ -1,26 +1,24 @@
 const std = @import("std");
 
 const adjectives = [_][]const u8{
-    "null",   "void",    "shadow",  "cyber",   "glitch",
-    "silent", "dark",    "neon",    "quantum", "binary",
-    "pixel",  "ghost",   "chaos",   "crypt",   "zero",
-    "phantom","static",  "broken",  "wild",    "frozen",
+    "null",    "void",   "shadow", "cyber",   "glitch",
+    "silent",  "dark",   "neon",   "quantum", "binary",
+    "pixel",   "ghost",  "chaos",  "crypt",   "zero",
+    "phantom", "static", "broken", "wild",    "frozen",
 };
 
 const nouns = [_][]const u8{
-    "puppy",   "kitten",  "wolf",    "fox",     "cat",
-    "dragon",  "ninja",   "samurai", "wizard",  "ghost",
-    "byte",    "bit",     "node",    "root",    "daemon",
-    "spectre", "raven",   "lynx",    "serpent", "phoenix",
+    "puppy",   "kitten", "wolf",    "fox",     "cat",
+    "dragon",  "ninja",  "samurai", "wizard",  "ghost",
+    "byte",    "bit",    "node",    "root",    "daemon",
+    "spectre", "raven",  "lynx",    "serpent", "phoenix",
 };
 
 const symbols = [_][]const u8{
     "0x", "_", ".", "-", "@", "#", "$",
 };
 
-const numbers = [_][]const u8{
-    "42", "13", "7", "666", "404", "1337", "9000", "420", "69", "0",
-};
+const numbers = [_][]const u8{ "42", "13", "7", "666", "404", "502", "500", "401", "1337", "9000", "420", "69", "0", "67", "8080" };
 
 fn pick(rng: std.Random, words: []const []const u8) []const u8 {
     return words[rng.int(usize) % words.len];

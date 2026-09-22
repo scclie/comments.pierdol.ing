@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS comments (
     html TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
     notified BOOLEAN NOT NULL DEFAULT FALSE,
+    event_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     honeypot TEXT DEFAULT ''
 );
