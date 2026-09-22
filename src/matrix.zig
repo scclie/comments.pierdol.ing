@@ -21,11 +21,10 @@ pub const Matrix = struct {
         const body = try formatMessage(self.allocator, thread_id, nickname, content, comment_id);
         defer self.allocator.free(body);
 
-        var rng = std.Random.DefaultPrng.init(0);
-        const timestamp = rng.random().int(u64);
+        // Use comment_id as transaction ID to ensure uniqueness
         const url = try std.fmt.allocPrint(self.allocator,
-            "{s}/_matrix/client/v3/rooms/{s}/send/m.room.message/{d}",
-            .{ self.homeserver, self.room_id, timestamp });
+            "{s}/_matrix/client/v3/rooms/{s}/send/m.room.message/{s}",
+            .{ self.homeserver, self.room_id, comment_id });
         defer self.allocator.free(url);
 
         const json_body = try buildJsonBody(self.allocator, body);
