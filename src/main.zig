@@ -5,6 +5,7 @@ const db = @import("db.zig");
 const markdown = @import("markdown.zig");
 const ratelimit = @import("ratelimit.zig");
 const matrix = @import("matrix.zig");
+const nickgen = @import("nickgen.zig");
 
 const App = struct {
     db: db.Db,
@@ -43,6 +44,7 @@ pub fn main(init: std.process.Init) !void {
     var router = try server.router(.{});
     router.options("*", corsPreflight, .{});
     router.get("/health", health, .{});
+    router.get("/api/nickname", getRandomNickname, .{});
     router.get("/api/threads/:id/comments", getComments, .{});
     router.post("/api/threads/:id/comments", createComment, .{});
     router.post("/api/comments/:id/approve", approveComment, .{});
@@ -343,6 +345,15 @@ fn addCorsHeaders(res: *httpz.Response, req: *httpz.Request) void {
 fn health(_: *App, req: *httpz.Request, res: *httpz.Response) !void {
     addCorsHeaders(res, req);
     try res.json(.{ .status = "ok" }, .{});
+}
+
+fn getRandomNickname(_: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    addCorsHeaders(res, req);
+    var seed_bytes: [@sizeOf(u64)]u8 = undefined;
+    _ = std.os.linux.getrandom(&seed_bytes, seed_bytes.len, 0);
+    var prng = std.Random.DefaultPrng.init(std.mem.readInt(u64, &seed_bytes, .little));
+    const nick = try nickgen.generate(res.arena, prng.random());
+    try res.json(.{ .nickname = nick }, .{});
 }
 
 fn getComments(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
