@@ -116,6 +116,27 @@ pub const Db = struct {
         return (affected orelse 0) > 0;
     }
 
+    pub fn setEventId(self: *Db, comment_id: []const u8, event_id: []const u8) !bool {
+        const affected = try self.pool.exec(
+            "UPDATE comments SET event_id = $1 WHERE id = $2",
+            .{ event_id, comment_id },
+        );
+        return (affected orelse 0) > 0;
+    }
+
+    pub fn getCommentIdByEventId(self: *Db, allocator: std.mem.Allocator, event_id: []const u8) !?[]const u8 {
+        var row = (try self.pool.rowOpts(
+            "SELECT id FROM comments WHERE event_id = $1",
+            .{event_id},
+            .{ .column_names = true },
+        )) orelse return null;
+        defer row.deinit() catch {};
+
+        const id_bytes = try row.get([]const u8, 0);
+        const id_hex = try pg.uuidToHex(id_bytes);
+        return allocator.dupe(u8, &id_hex);
+    }
+
     pub fn getUnnotifiedComments(self: *Db, allocator: std.mem.Allocator) ![]Comment {
         var comments = std.ArrayList(Comment).empty;
         errdefer {

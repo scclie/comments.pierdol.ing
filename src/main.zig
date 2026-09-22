@@ -50,9 +50,118 @@ pub fn main(init: std.process.Init) !void {
 
     try resendUnnotified(&app);
 
+    // martix sync thread
+    var sync_thread = try std.Thread.spawn(.{}, matrixSyncLoop, .{&app});
+    defer sync_thread.join();
+
     std.log.info("listening on http://localhost:{d}", .{cfg.port});
 
     try server.listen();
+}
+
+fn matrixSyncLoop(app: *App) void {
+    std.log.info("starting matrix sync loop", .{});
+
+    while (true) {
+        const response = app.matrix.sync() catch |err| {
+            std.log.warn("matrix sync failed: {}", .{err});
+            std.Thread.yield() catch {};
+            continue;
+        };
+
+        if (response) |body| {
+            defer app.allocator.free(body);
+            processSyncResponse(app, body) catch |err| {
+                std.log.warn("failed to process sync response: {}", .{err});
+            };
+        }
+
+        std.Thread.yield() catch {};
+    }
+}
+
+fn processSyncResponse(app: *App, body: []const u8) !void {
+    const parsed = std.json.parseFromSlice(std.json.Value, app.allocator, body, .{}) catch return;
+    defer parsed.deinit();
+
+    const root = parsed.value;
+
+    const rooms = switch (root) {
+        .object => |obj| obj.get("rooms") orelse return,
+        else => return,
+    };
+
+    const join = switch (rooms) {
+        .object => |obj| obj.get("join") orelse return,
+        else => return,
+    };
+
+    const room = switch (join) {
+        .object => |obj| obj.get(app.matrix.room_id) orelse return,
+        else => return,
+    };
+
+    const timeline = switch (room) {
+        .object => |obj| obj.get("timeline") orelse return,
+        else => return,
+    };
+
+    const events = switch (timeline) {
+        .object => |obj| obj.get("events") orelse return,
+        else => return,
+    };
+
+    switch (events) {
+        .array => |arr| {
+            for (arr.items) |event| {
+                processEvent(app, event) catch |err| {
+                    std.log.warn("failed to process event: {}", .{err});
+                };
+            }
+        },
+        else => return,
+    }
+}
+
+fn processEvent(app: *App, event: std.json.Value) !void {
+    const event_obj = switch (event) {
+        .object => |obj| obj,
+        else => return,
+    };
+
+    const event_type = switch (event_obj.get("type") orelse return) {
+        .string => |s| s,
+        else => return,
+    };
+
+    if (!std.mem.eql(u8, event_type, "m.room.message")) return;
+
+    const sender = switch (event_obj.get("sender") orelse return) {
+        .string => |s| s,
+        else => return,
+    };
+    if (std.mem.eql(u8, sender, "@comments-bot:pierdol.ing")) return;
+
+    const content = switch (event_obj.get("content") orelse return) {
+        .object => |obj| obj,
+        else => return,
+    };
+
+    const body = switch (content.get("body") orelse return) {
+        .string => |s| s,
+        else => return,
+    };
+
+    // parse command
+    if (std.mem.startsWith(u8, body, "ok ") or std.mem.eql(u8, body, "ok")) {
+        const comment_id = if (body.len > 3) body[3..] else return;
+        std.log.info("approving comment {s}", .{comment_id});
+        _ = try app.db.approveComment(comment_id);
+    } else if (std.mem.startsWith(u8, body, "no ") or std.mem.eql(u8, body, "no")) {
+        const comment_id = if (body.len > 3) body[3..] else return;
+        std.log.info("deleting comment {s}", .{comment_id});
+        _ = try app.db.deleteComment(comment_id);
+    }
 }
 
 fn resendUnnotified(app: *App) !void {
@@ -67,10 +176,15 @@ fn resendUnnotified(app: *App) !void {
     std.log.info("resending {d} unnotified comments", .{comments.len});
 
     for (comments) |c| {
-        app.matrix.sendNotification(c.thread_id, c.nickname, c.content, c.id) catch |err| {
+        const event_id = app.matrix.sendNotification(c.thread_id, c.nickname, c.site, c.content, c.id, c.created_at) catch |err| {
             std.log.warn("failed to resend notification for {s}: {}", .{ c.id, err });
             continue;
         };
+        defer app.allocator.free(event_id);
+
+        if (event_id.len > 0) {
+            _ = try app.db.setEventId(c.id, event_id);
+        }
 
         _ = try app.db.markAsNotified(c.id);
         std.log.info("resent notification for {s}", .{c.id});
@@ -231,10 +345,15 @@ fn createComment(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
         .honeypot = body.honeypot,
     });
 
-    app.matrix.sendNotification(thread_id, nickname, content, comment.id) catch |err| {
+    const event_id = app.matrix.sendNotification(thread_id, nickname, body.site, content, comment.id, comment.created_at) catch |err| {
         std.log.warn("failed to send matrix notification: {}", .{err});
         return;
     };
+    defer app.allocator.free(event_id);
+
+    if (event_id.len > 0) {
+        _ = try app.db.setEventId(comment.id, event_id);
+    }
 
     _ = try app.db.markAsNotified(comment.id);
 
