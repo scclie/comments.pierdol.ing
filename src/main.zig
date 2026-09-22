@@ -50,6 +50,12 @@ pub fn main(init: std.process.Init) !void {
 
     try resendUnnotified(&app);
 
+    // Resume matrix sync from the last persisted batch to avoid reprocessing the whole history
+    if (try app.db.getState(app.allocator, "matrix_since")) |since| {
+        app.matrix.since = since;
+        std.log.info("resumed matrix sync from since={s}", .{since});
+    }
+
     // martix sync thread
     var sync_thread = try std.Thread.spawn(.{}, matrixSyncLoop, .{&app});
     defer sync_thread.join();
@@ -85,6 +91,9 @@ fn matrixSyncLoop(app: *App) void {
                             app.allocator.free(old);
                         }
                         app.matrix.since = app.allocator.dupe(u8, next_batch.string) catch null;
+                        app.db.setState("matrix_since", next_batch.string) catch |err| {
+                            std.log.warn("failed to persist matrix_since: {}", .{err});
+                        };
                     }
                 }
             }
@@ -207,6 +216,13 @@ fn processEvent(app: *App, event: std.json.Value) !void {
                     const comment = try app.db.getCommentById(app.allocator, comment_id);
                     if (comment) |c| {
                         defer freeComment(c, app.allocator);
+
+                        if (try app.db.ownerReplyExists(c.id)) {
+                            std.log.info("owner reply for comment {s} already exists, skipping", .{comment_id});
+                            app.matrix.sendMessage("ok, comment approved (reply already posted)") catch {};
+                            return;
+                        }
+
                         const html = try markdown.render(app.allocator, answer);
                         defer app.allocator.free(html);
                         _ = try app.db.createOwnerReply(app.allocator, .{

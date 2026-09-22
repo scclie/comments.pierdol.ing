@@ -177,6 +177,39 @@ pub const Db = struct {
         return rowToComment(allocator, row);
     }
 
+    pub fn ownerReplyExists(self: *Db, parent_id: []const u8) !bool {
+        var row = (try self.pool.rowOpts(
+            \\SELECT 1 FROM comments WHERE parent_id = $1 AND nickname = 'scclie' LIMIT 1
+        ,
+            .{parent_id},
+            .{ .column_names = true },
+        )) orelse return false;
+        defer row.deinit() catch {};
+
+        return true;
+    }
+
+    pub fn setState(self: *Db, key: []const u8, value: []const u8) !void {
+        _ = try self.pool.exec(
+            \\INSERT INTO state (key, value) VALUES ($1, $2)
+            \\ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        ,
+            .{ key, value },
+        );
+    }
+
+    pub fn getState(self: *Db, allocator: std.mem.Allocator, key: []const u8) !?[]const u8 {
+        var row = (try self.pool.rowOpts(
+            "SELECT value FROM state WHERE key = $1",
+            .{key},
+            .{ .column_names = true },
+        )) orelse return null;
+        defer row.deinit() catch {};
+
+        const value = try row.get([]const u8, 0);
+        return allocator.dupe(u8, value) catch return null;
+    }
+
     pub fn getUnnotifiedComments(self: *Db, allocator: std.mem.Allocator) ![]Comment {
         var comments = std.ArrayList(Comment).empty;
         errdefer {

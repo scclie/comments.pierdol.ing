@@ -16,3 +16,8 @@ CREATE TABLE IF NOT EXISTS comments (
 CREATE INDEX idx_comments_thread_status ON comments(thread_id, status);
 CREATE INDEX idx_comments_created_at ON comments(created_at);
 CREATE INDEX idx_comments_notified ON comments(notified) WHERE notified = false;
+
+CREATE TABLE IF NOT EXISTS state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
