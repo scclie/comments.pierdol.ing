@@ -70,12 +70,21 @@ pub fn main(init: std.process.Init) !void {
 fn matrixSyncLoop(app: *App) void {
     std.log.info("starting matrix sync loop", .{});
 
+    const initial_retry_delay_ns = std.time.ns_per_s;
+    const max_retry_delay_ns = 30 * std.time.ns_per_s;
+    var retry_delay_ns: u64 = initial_retry_delay_ns;
+
     while (true) {
         const response = app.matrix.sync() catch |err| {
-            std.log.warn("matrix sync failed: {}", .{err});
-            std.Thread.yield() catch {};
+            std.log.warn("matrix sync failed; retrying in {d}ms: {}", .{
+                @divFloor(retry_delay_ns, std.time.ns_per_ms),
+                err,
+            });
+            _ = app.io.sleep(.fromNanoseconds(@intCast(retry_delay_ns)), .awake) catch {};
+            retry_delay_ns = @min(max_retry_delay_ns, retry_delay_ns *| 2);
             continue;
         };
+        retry_delay_ns = initial_retry_delay_ns;
 
         if (response) |body| {
             defer app.allocator.free(body);
@@ -208,7 +217,7 @@ fn processEvent(app: *App, event: std.json.Value) !void {
             std.log.info("approving comment {s} via reply", .{comment_id});
             const approved = try app.db.approveComment(comment_id);
             if (!approved) {
-                app.matrix.sendMessage("hmm, comment not found") catch {};
+                trySendMatrixMessage(app, "hmm, comment not found", "sending missing-comment response");
                 return;
             }
 
@@ -221,7 +230,7 @@ fn processEvent(app: *App, event: std.json.Value) !void {
 
                         if (try app.db.ownerReplyExists(c.id)) {
                             std.log.info("owner reply for comment {s} already exists, skipping", .{comment_id});
-                            app.matrix.sendMessage("ok, comment approved (reply already posted)") catch {};
+                            trySendMatrixMessage(app, "ok, comment approved (reply already posted)", "sending duplicate-reply confirmation");
                             return;
                         }
 
@@ -235,11 +244,11 @@ fn processEvent(app: *App, event: std.json.Value) !void {
                         });
                         std.log.info("posted owner reply to comment {s}", .{comment_id});
                     }
-                    app.matrix.sendMessage("ok, comment approved + your reply posted") catch {};
+                    trySendMatrixMessage(app, "ok, comment approved + your reply posted", "sending approval-with-reply confirmation");
                     return;
                 }
             }
-            app.matrix.sendMessage("ok, comment approved") catch {};
+            trySendMatrixMessage(app, "ok, comment approved", "sending approval confirmation");
         } else if (std.mem.eql(u8, text, "no") or std.mem.eql(u8, text, "/no") or std.mem.eql(u8, text, "no ")) {
             const comment_id = try app.db.getCommentIdByEventId(app.allocator, event_id) orelse {
                 std.log.warn("no comment found for event_id {s}", .{event_id});
@@ -249,9 +258,9 @@ fn processEvent(app: *App, event: std.json.Value) !void {
 
             std.log.info("deleting comment {s} via reply", .{comment_id});
             const deleted = try app.db.deleteComment(comment_id);
-            app.matrix.sendMessage(if (deleted) "ok, comment deleted" else "hmm, comment not found") catch {};
+            trySendMatrixMessage(app, if (deleted) "ok, comment deleted" else "hmm, comment not found", "sending deletion confirmation");
         } else {
-            app.matrix.sendMessage("i heard u, but only \"ok [your answer]\" or \"no\" work as replies") catch {};
+            trySendMatrixMessage(app, "i heard u, but only \"ok [your answer]\" or \"no\" work as replies", "sending invalid-reply guidance");
         }
         return;
     }
@@ -265,6 +274,12 @@ fn processEvent(app: *App, event: std.json.Value) !void {
         std.log.info("deleting comment {s}", .{comment_id});
         _ = try app.db.deleteComment(comment_id);
     }
+}
+
+fn trySendMatrixMessage(app: *App, text: []const u8, context: []const u8) void {
+    app.matrix.sendMessage(text) catch |err| {
+        std.log.warn("matrix message failed while {s}: {}", .{ context, err });
+    };
 }
 
 fn stripReplyQuote(allocator: std.mem.Allocator, body: []const u8) ![]const u8 {
