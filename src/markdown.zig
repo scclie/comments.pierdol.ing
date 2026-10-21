@@ -92,6 +92,13 @@ fn parseLink(input: []const u8, start: usize) ?Link {
     if (k >= input.len) return null;
     const url = input[j + 2 .. k];
     if (text.len == 0 or url.len == 0) return null;
+    for (url) |c| {
+        if (c <= 0x20 or c == 0x7f or c == '\\') return null;
+    }
+    const safe = std.ascii.startsWithIgnoreCase(url, "https://") or
+        std.ascii.startsWithIgnoreCase(url, "http://") or
+        (url[0] == '/' and (url.len == 1 or url[1] != '/')) or url[0] == '#';
+    if (!safe) return null;
     return .{ .text = text, .url = url, .end = k + 1 };
 }
 
@@ -215,4 +222,26 @@ test "empty input" {
     const result = try render(allocator, "");
     defer allocator.free(result);
     try std.testing.expectEqualStrings("", result);
+}
+
+test "unsafe URL schemes never become clickable links" {
+    for ([_][]const u8{
+        "[x](javascript:alert`1`)",
+        "[x](JaVaScRiPt:alert`1`)",
+        "[x](data:text/html,test)",
+        "[x](//attacker.example/test)",
+        "[x](java\tscript:alert`1`)",
+    }) |input| {
+        const result = try render(std.testing.allocator, input);
+        defer std.testing.allocator.free(result);
+        try std.testing.expect(std.mem.indexOf(u8, result, "<a href=") == null);
+    }
+}
+
+test "relative and HTTPS links still work" {
+    for ([_][]const u8{ "[x](/posts/one)", "[x](https://example.org/post)" }) |input| {
+        const result = try render(std.testing.allocator, input);
+        defer std.testing.allocator.free(result);
+        try std.testing.expect(std.mem.indexOf(u8, result, "<a href=") != null);
+    }
 }

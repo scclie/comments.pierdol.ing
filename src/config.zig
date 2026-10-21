@@ -2,6 +2,8 @@ const std = @import("std");
 
 pub const Config = struct {
     port: u16,
+    bind_address: []const u8,
+    trusted_proxy: []const u8,
     database_url: []const u8,
     matrix_homeserver: []const u8,
     matrix_bot_token: []const u8,
@@ -36,6 +38,8 @@ pub const Config = struct {
 
         return Config{
             .port = port,
+            .bind_address = environ_map.get("BIND_ADDRESS") orelse "127.0.0.1",
+            .trusted_proxy = environ_map.get("TRUSTED_PROXY_IP") orelse "127.0.0.1",
             .database_url = database_url,
             .matrix_homeserver = matrix_homeserver,
             .matrix_bot_token = matrix_bot_token,

@@ -38,6 +38,7 @@ pub const RateLimiter = struct {
         var it = self.entries.iterator();
         while (it.next()) |entry| {
             entry.value_ptr.timestamps.deinit(self.allocator);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.entries.deinit();
     }
@@ -49,6 +50,11 @@ pub const RateLimiter = struct {
         const result = self.entries.getOrPut(key) catch return false;
 
         if (!result.found_existing) {
+            const owned_key = self.allocator.dupe(u8, key) catch {
+                _ = self.entries.remove(key);
+                return false;
+            };
+            result.key_ptr.* = owned_key;
             result.value_ptr.* = .{
                 .timestamps = std.ArrayList(i64).empty,
             };
@@ -92,7 +98,9 @@ pub const RateLimiter = struct {
 
             if (entry.value_ptr.timestamps.items.len == 0) {
                 entry.value_ptr.timestamps.deinit(self.allocator);
-                _ = self.entries.remove(entry.key_ptr.*);
+                const key = entry.key_ptr.*;
+                _ = self.entries.remove(key);
+                self.allocator.free(key);
             }
         }
     }
@@ -105,6 +113,15 @@ test "basic rate limiting allows requests under limit" {
     try std.testing.expect(limiter.check("127.0.0.1"));
     try std.testing.expect(limiter.check("127.0.0.1"));
     try std.testing.expect(limiter.check("127.0.0.1"));
+}
+
+test "rate-limit keys outlive a mutable request buffer" {
+    var limiter = RateLimiter.init(std.testing.allocator, 60_000, 1);
+    defer limiter.deinit();
+    var request_key = [_]u8{ 'c', 'l', 'i', 'e', 'n', 't' };
+    try std.testing.expect(limiter.check(&request_key));
+    @memset(&request_key, 'x');
+    try std.testing.expect(!limiter.check("client"));
 }
 
 test "rate limiting blocks requests over limit" {

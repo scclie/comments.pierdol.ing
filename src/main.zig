@@ -6,6 +6,7 @@ const markdown = @import("markdown.zig");
 const ratelimit = @import("ratelimit.zig");
 const matrix = @import("matrix.zig");
 const nickgen = @import("nickgen.zig");
+const net = @import("net.zig");
 
 const App = struct {
     db: db.Db,
@@ -15,6 +16,8 @@ const App = struct {
     bot_secret: []const u8,
     io: std.Io,
     allocator: std.mem.Allocator,
+    trusted_proxy: std.Io.net.IpAddress,
+    limiter_mutex: std.Io.Mutex = .init,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -33,10 +36,11 @@ pub fn main(init: std.process.Init) !void {
         .bot_secret = cfg.bot_secret,
         .io = init.io,
         .allocator = allocator,
+        .trusted_proxy = try std.Io.net.IpAddress.parse(cfg.trusted_proxy, 0),
     };
 
     var server = try httpz.Server(*App).init(init.io, allocator, .{
-        .address = .localhost(cfg.port),
+        .address = .{ .ip = try std.Io.net.IpAddress.parse(cfg.bind_address, cfg.port) },
     }, &app);
     defer server.deinit();
     defer server.stop();
@@ -52,7 +56,7 @@ pub fn main(init: std.process.Init) !void {
 
     try resendUnnotified(&app);
 
-    // Resume matrix sync from the last persisted batch to avoid reprocessing the whole history
+    // resume matrix sync from the last persisted batch to avoid reprocessing the whole history
     if (try app.db.getState(app.allocator, "matrix_since")) |since| {
         app.matrix.since = since;
         std.log.info("resumed matrix sync from since={s}", .{since});
@@ -202,7 +206,6 @@ fn processEvent(app: *App, event: std.json.Value) !void {
     };
 
     if (reply_event_id) |event_id| {
-        // Strip the quoted "> " block that Element prepends to replies
         const reply_text = try stripReplyQuote(app.allocator, body);
         defer app.allocator.free(reply_text);
         const text = std.mem.trim(u8, reply_text, " \t");
@@ -373,8 +376,11 @@ fn getRandomNickname(_: *App, req: *httpz.Request, res: *httpz.Response) !void {
 
 fn getComments(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     addCorsHeaders(res, req);
-    const ip = getClientIp(req);
-    if (!app.read_limiter.check(ip)) {
+    const ip = try net.clientIp(req.arena, req.address, app.trusted_proxy, req.header("x-real-ip"));
+    app.limiter_mutex.lockUncancelable(app.io);
+    const allowed = app.read_limiter.check(ip);
+    app.limiter_mutex.unlock(app.io);
+    if (!allowed) {
         res.status = 429;
         try res.json(.{ .@"error" = "rate limit exceeded" }, .{});
         return;
@@ -434,8 +440,11 @@ const CreateCommentBody = struct {
 
 fn createComment(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     addCorsHeaders(res, req);
-    const ip = getClientIp(req);
-    if (!app.write_limiter.check(ip)) {
+    const ip = try net.clientIp(req.arena, req.address, app.trusted_proxy, req.header("x-real-ip"));
+    app.limiter_mutex.lockUncancelable(app.io);
+    const allowed = app.write_limiter.check(ip);
+    app.limiter_mutex.unlock(app.io);
+    if (!allowed) {
         res.status = 429;
         try res.json(.{ .@"error" = "rate limit exceeded" }, .{});
         return;
@@ -566,14 +575,4 @@ fn deleteComment(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     }
 
     try res.json(.{ .status = "deleted" }, .{});
-}
-
-fn getClientIp(req: *httpz.Request) []const u8 {
-    if (req.header("x-forwarded-for")) |xff| {
-        if (std.mem.indexOf(u8, xff, ",")) |comma_idx| {
-            return std.mem.trim(u8, xff[0..comma_idx], " ");
-        }
-        return xff;
-    }
-    return "unknown";
 }
